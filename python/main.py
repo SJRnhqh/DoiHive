@@ -60,7 +60,7 @@ def main():
     error_dir = Path("../error")
 
     # 批量下载 PDF / Batch download PDFs
-    pdf_hive(urls[:10], pdf_dir, error_dir)
+    pdf_hive(urls[:100], pdf_dir, error_dir)
 
     # 使用 Rich Console 美化完成信息 / Use Rich Console to beautify completion message
     console.print()

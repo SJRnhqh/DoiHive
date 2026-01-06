@@ -29,7 +29,7 @@ from .logger import log_to_file_only
 
 
 def pdf_hive(
-    urls: list[str], pdf_dir: Path, error_dir: Path = None, max_workers: int = 4
+    urls: list[str], pdf_dir: Path, error_dir: Path = None, max_workers: int = 16
 ):
     """
     批量下载 PDF 文件（多线程版本）
@@ -87,10 +87,19 @@ def pdf_hive(
     # 记录开始时间 / Record start time
     start_time = time.time()
 
-    # 设置请求头，模拟浏览器 / Set request headers to simulate browser
-    headers = {
+    # 创建复用的 Session（连接池优化）/ Create reusable Session (connection pool optimization)
+    session = requests.Session()
+    session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
+    })
+    # 配置连接池 / Configure connection pool
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=max_workers * 2,  # 最大连接池数 / Max connection pools
+        pool_maxsize=max_workers * 2,      # 每个池的最大连接数 / Max connections per pool
+        max_retries=0,                     # 禁用重试（由外部处理错误）/ Disable retries (handle errors externally)
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
 
     # 创建 Rich 进度条 / Create Rich progress bar
     progress = Progress(
@@ -125,7 +134,7 @@ def pdf_hive(
             future_to_url = {}
             future_to_start_time = {}
             for url in urls:
-                future = executor.submit(_download_single_pdf, url, headers, pdf_dir)
+                future = executor.submit(_download_single_pdf, url, session, pdf_dir)
                 future_to_url[future] = url
                 future_to_start_time[future] = time.time()
 
@@ -322,6 +331,13 @@ def pdf_hive(
     table.add_row(
         "⏱️  总耗时 / Total Time", f"[yellow]{format_time(total_time)}[/yellow]"
     )
+    # 计算平均墙钟时间（总耗时 / 总任务数）/ Calculate average wall-clock time (total time / total tasks)
+    if stats["total"] > 0 and total_time > 0:
+        avg_wall_clock_time = total_time / stats["total"]
+        table.add_row(
+            "📊 平均墙钟时间 / Avg Wall-clock Time",
+            f"[cyan]{format_time(avg_wall_clock_time)}/任务[/cyan]",
+        )
     if stats["download_times"]:
         table.add_row(
             "⚡ 平均耗时 / Avg Time", f"[yellow]{format_time(avg_time)}[/yellow]"
@@ -346,6 +362,11 @@ def pdf_hive(
     if stats["total_size"] > 0:
         log_to_file_only(logging.INFO, f"💾 总大小: {format_size(stats['total_size'])}")
     log_to_file_only(logging.INFO, f"⏱️  总耗时: {format_time(total_time)}")
+    if stats["total"] > 0 and total_time > 0:
+        avg_wall_clock_time = total_time / stats["total"]
+        log_to_file_only(
+            logging.INFO, f"📊 平均墙钟时间: {format_time(avg_wall_clock_time)}/任务"
+        )
     if stats["download_times"]:
         log_to_file_only(logging.INFO, f"⚡ 平均耗时: {format_time(avg_time)}")
         if stats["success_times"]:
@@ -362,14 +383,14 @@ def pdf_hive(
     return stats
 
 
-def _download_single_pdf(url: str, headers: dict, pdf_dir: Path) -> Dict[str, Any]:
+def _download_single_pdf(url: str, session: requests.Session, pdf_dir: Path) -> Dict[str, Any]:
     """
     下载单个 PDF 文件的完整逻辑
     Complete logic for downloading a single PDF file
 
     Args:
         url (str): Sci-Hub 页面 URL / Sci-Hub page URL
-        headers (dict): HTTP 请求头 / HTTP request headers
+        session (requests.Session): 复用的 HTTP Session（连接池）/ Reusable HTTP Session (connection pool)
         pdf_dir (Path): PDF 保存目录 / PDF save directory
 
     Returns:
@@ -396,7 +417,7 @@ def _download_single_pdf(url: str, headers: dict, pdf_dir: Path) -> Dict[str, An
 
     # 第一步：获取页面 HTML / Step 1: Get page HTML
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = session.get(url, timeout=10)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
         result["error"] = f"页面请求失败: {str(e)}"
@@ -414,7 +435,7 @@ def _download_single_pdf(url: str, headers: dict, pdf_dir: Path) -> Dict[str, An
 
     # 第三步：下载 PDF 文件 / Step 3: Download PDF file
     try:
-        pdf_response = requests.get(pdf_url, headers=headers, timeout=30, stream=True)
+        pdf_response = session.get(pdf_url, timeout=30, stream=True)
         pdf_response.raise_for_status()
 
         # 使用 stream=True 下载大文件 / Use stream=True to download large files
