@@ -1,0 +1,15 @@
+# MacOS
+.DS_Store
+
+# IDE
+.vscode
+
+# pdf & txt
+pdf/
+archive/
+
+# env
+.venv/
+
+# python
+__pycache__/
