@@ -1,6 +1,11 @@
 # python/utils/analyze.py
 # External dependencies / 外部依赖
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
 from pathlib import Path
+from rich import box
 import re
 
 
@@ -126,17 +131,19 @@ def doi_checker(archive_dir: Path):
     Args:
         archive_dir (Path): archive 目录路径 / Archive directory path
     """
+    console = Console()
+    
     if not archive_dir.exists():
-        print(f"❌ 目录不存在: {archive_dir.resolve()}")
+        console.print(f"[bold red]❌ 目录不存在:[/bold red] {archive_dir.resolve()}")
         return
 
     # 获取所有 .txt 文件并排序 / Get all .txt files and sort them
     txt_files = sorted([f for f in archive_dir.glob("*.txt")])
     if not txt_files:
-        print(f"📭 {archive_dir} 下没有 .txt 文件")
+        console.print(f"[yellow]📭 {archive_dir} 下没有 .txt 文件[/yellow]")
         return
 
-    print(f"🔍 发现 {len(txt_files)} 个 .txt 文件，开始批量分析...\n")
+    console.print(f"\n[bold cyan]🔍 发现[/bold cyan] [yellow]{len(txt_files)} 个 .txt 文件[/yellow]，[bold cyan]开始批量分析...[/bold cyan]\n")
 
     all_stats = []
     grand_total_records = 0
@@ -148,87 +155,113 @@ def doi_checker(archive_dir: Path):
     )  # 追踪每个 DOI 出现的文件和次数 / Track which files each DOI appears in and count
 
     # 处理每个文件 / Process each file
-    for file_path in txt_files:
-        print(f"📄 处理文件: {file_path.name}")
-        stats = _analyze_file(file_path)
-        if stats is None:
-            continue
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("[cyan]📄 处理文件[/cyan]", total=len(txt_files))
+        
+        for file_path in txt_files:
+            stats = _analyze_file(file_path)
+            if stats is None:
+                progress.update(task, advance=1)
+                continue
 
-        all_stats.append(stats)
-        grand_total_records += stats["total_records"]
-        grand_total_dois += stats["valid_dois"]
-        grand_missing += stats["missing_count"]
+            all_stats.append(stats)
+            grand_total_records += stats["total_records"]
+            grand_total_dois += stats["valid_dois"]
+            grand_missing += stats["missing_count"]
 
-        # 收集该文件的所有 DOI 并记录文件信息 / Collect all DOIs from this file and track file info
-        text = _read_file_text(file_path)
-        if text:
-            records = _parse_wos_records_with_index(text)
-            for idx, lines in records:
-                doi = _extract_doi_from_record(lines)
-                if doi:
-                    all_dois.append(doi)
-                    # 记录 DOI 出现的文件和次数 / Record which file this DOI appears in and count
-                    if doi not in doi_file_map:
-                        doi_file_map[doi] = {}
-                    # 统计每个文件中出现的次数 / Count occurrences in each file
-                    if file_path.name not in doi_file_map[doi]:
-                        doi_file_map[doi][file_path.name] = 0
-                    doi_file_map[doi][file_path.name] += 1
+            # 收集该文件的所有 DOI 并记录文件信息 / Collect all DOIs from this file and track file info
+            text = _read_file_text(file_path)
+            if text:
+                records = _parse_wos_records_with_index(text)
+                for idx, lines in records:
+                    doi = _extract_doi_from_record(lines)
+                    if doi:
+                        all_dois.append(doi)
+                        # 记录 DOI 出现的文件和次数 / Record which file this DOI appears in and count
+                        if doi not in doi_file_map:
+                            doi_file_map[doi] = {}
+                        # 统计每个文件中出现的次数 / Count occurrences in each file
+                        if file_path.name not in doi_file_map[doi]:
+                            doi_file_map[doi][file_path.name] = 0
+                        doi_file_map[doi][file_path.name] += 1
 
-        # 如果该文件有缺失，打印详情 / If this file has missing DOIs, print details
-        if stats["missing_count"] > 0:
-            print(f"   ❌ {stats['missing_count']} 条记录缺失 DOI")
-            for idx, content in stats["missing_details"]:
-                print(f"\n   --- {file_path.name} | 无 DOI 记录 #{idx} ---")
-                # 缩进内容以便阅读 / Indent content for readability
-                print(f"   {content.replace(chr(10), chr(10) + '   ')}")
-        else:
-            print(f"   ✅ 全部 {stats['total_records']} 条记录均有 DOI")
+            # 如果该文件有缺失，打印详情 / If this file has missing DOIs, print details
+            if stats["missing_count"] > 0:
+                console.print(f"   [red]❌ {stats['missing_count']} 条记录缺失 DOI[/red]")
+                for idx, content in stats["missing_details"]:
+                    console.print(Panel(
+                        content,
+                        title=f"[yellow]{file_path.name}[/yellow] | [red]无 DOI 记录 #{idx}[/red]",
+                        border_style="red",
+                        expand=False,
+                    ))
+            else:
+                console.print(f"   [green]✅ 全部 {stats['total_records']} 条记录均有 DOI[/green]")
 
-        print()  # 空行分隔 / Empty line separator
+            progress.update(task, advance=1)
 
     # === 最终汇总 / Final Summary ===
     unique_dois = len(set(all_dois))  # 唯一 DOI 数量 / Unique DOI count
-    print("=" * 60)
-    print("📊 批量分析汇总:")
-    print(f"📁 文件总数: {len(txt_files)}")
-    print(f"📚 总文献记录数: {grand_total_records}")
-    print(f"✅ 总有效 DOI 数（含重复）: {grand_total_dois}")
-    print(f"🔑 唯一 DOI 数: {unique_dois}")
-    print(f"❌ 总缺失 DOI 数: {grand_missing}")
+    
+    # 创建汇总表格 / Create summary table
+    summary_table = Table(title="📊 批量分析汇总 / Batch Analysis Summary", box=box.ROUNDED)
+    summary_table.add_column("项目 / Item", style="cyan", no_wrap=True)
+    summary_table.add_column("数值 / Value", style="magenta", justify="right")
+    
+    summary_table.add_row("📁 文件总数 / Total Files", f"{len(txt_files)}")
+    summary_table.add_row("📚 总文献记录数 / Total Records", f"{grand_total_records}")
+    summary_table.add_row("✅ 总有效 DOI 数（含重复）/ Total DOIs (with duplicates)", f"{grand_total_dois}")
+    summary_table.add_row("🔑 唯一 DOI 数 / Unique DOIs", f"[green]{unique_dois}[/green]")
+    summary_table.add_row("❌ 总缺失 DOI 数 / Missing DOIs", f"[red]{grand_missing}[/red]")
+    
     if grand_total_records > 0:
         coverage = grand_total_dois / grand_total_records * 100
-        print(f"📈 DOI 覆盖率: {coverage:.2f}%")
+        coverage_color = "green" if coverage >= 95 else "yellow" if coverage >= 80 else "red"
+        summary_table.add_row("📈 DOI 覆盖率 / DOI Coverage", f"[{coverage_color}]{coverage:.2f}%[/{coverage_color}]")
+    
+    console.print()
+    console.print(summary_table)
 
     # 检查并打印重复 DOI 详情 / Check and print duplicate DOI details
     if grand_total_dois > unique_dois:
         duplicates = grand_total_dois - unique_dois
-        print(f"\n🔄 发现 {duplicates} 个重复 DOI:")
+        console.print(f"\n[bold yellow]🔄 发现 {duplicates} 个重复 DOI:[/bold yellow]")
+        
         # 找出有重复的 DOI（跨文件重复或同一文件内重复）/ Find DOIs with duplicates (across files or within same file)
         duplicate_dois = {
             doi: file_counts
             for doi, file_counts in doi_file_map.items()
             if sum(file_counts.values()) > 1  # 总出现次数 > 1
         }
+        
+        # 创建重复 DOI 表格 / Create duplicate DOI table
+        dup_table = Table(box=box.SIMPLE)
+        dup_table.add_column("DOI", style="cyan")
+        dup_table.add_column("详情 / Details", style="yellow")
+        
         for doi, file_counts in sorted(duplicate_dois.items()):
             total_count = sum(file_counts.values())
             file_list = []
             for filename, count in sorted(file_counts.items()):
                 if count > 1:
-                    file_list.append(f"{filename} (出现 {count} 次)")
+                    file_list.append(f"{filename} ([red]出现 {count} 次[/red])")
                 else:
                     file_list.append(filename)
-            print(f"   📄 {doi}")
+            
             if len(file_counts) > 1:
-                print(
-                    f"      跨 {len(file_counts)} 个文件，共出现 {total_count} 次: {', '.join(file_list)}"
-                )
+                details = f"跨 [cyan]{len(file_counts)}[/cyan] 个文件，共出现 [red]{total_count}[/red] 次: {', '.join(file_list)}"
             else:
-                print(
-                    f"      在同一文件中出现 {total_count} 次: {', '.join(file_list)}"
-                )
-
-    print("=" * 60)
+                details = f"在同一文件中出现 [red]{total_count}[/red] 次: {', '.join(file_list)}"
+            
+            dup_table.add_row(f"[bold]{doi}[/bold]", details)
+        
+        console.print(dup_table)
 
 
 def doi_extractor(archive_dir: Path) -> list[str]:
@@ -242,6 +275,8 @@ def doi_extractor(archive_dir: Path) -> list[str]:
     Returns:
         list[str]: DOI 列表（已去重）/ List of unique DOIs
     """
+    console = Console()
+    
     if not archive_dir.exists():
         return []
 
@@ -260,6 +295,8 @@ def doi_extractor(archive_dir: Path) -> list[str]:
             if doi:
                 dois.append(doi)
 
-    unique_dois = list(set(dois))  # 去重 / Remove duplicates
-    print(f"🔍 发现 {len(unique_dois)} 个有效 DOI")
+    # 去重（不保持顺序，提升性能）/ Remove duplicates (order not preserved for performance)
+    unique_dois = list(set(dois))
+    
+    console.print(f"[bold cyan]🔍 发现[/bold cyan] [green]{len(unique_dois)} 个有效 DOI[/green]")
     return unique_dois

@@ -4,9 +4,11 @@
 # IDE
 .vscode
 
-# pdf & txt
+# pdf & txt & error & logs
 pdf/
 archive/
+error/
+logs/
 
 # env
 .venv/

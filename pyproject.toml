@@ -1,11 +1,13 @@
 [project]
 name = "doihive"
-version = "0.1.0"
+version = "0.0.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "beautifulsoup4>=4.14.3",
     "requests>=2.31.0",
+    "rich>=14.2.0",
 ]
 
 [dependency-groups]

@@ -30,10 +30,11 @@ def main():
     # 获取 pdf 目录路径 / Get pdf directory path
     pdf_dir = Path("../pdf")
 
+    # 获取 error 目录路径 / Get error directory path
+    error_dir = Path("../error")
+
     # 批量下载 PDF / Batch download PDFs
-    # pdf_hive(urls[:3], pdf_dir) TODO: 需要测试
-    
-    print(urls[:3])
+    pdf_hive(urls[:3], pdf_dir, error_dir)
 
 
 if __name__ == "__main__":
