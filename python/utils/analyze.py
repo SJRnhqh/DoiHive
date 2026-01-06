@@ -6,7 +6,12 @@ from rich.table import Table
 from rich.panel import Panel
 from pathlib import Path
 from rich import box
+import logging
 import re
+
+
+# Local modules / 本地模块
+from .logger import log_to_file_only
 
 
 def _parse_wos_records_with_index(text: str):
@@ -131,19 +136,29 @@ def doi_checker(archive_dir: Path):
     Args:
         archive_dir (Path): archive 目录路径 / Archive directory path
     """
+    logger = logging.getLogger("doihive")
     console = Console()
-    
+
     if not archive_dir.exists():
-        console.print(f"[bold red]❌ 目录不存在:[/bold red] {archive_dir.resolve()}")
+        error_msg = f"❌ 目录不存在: {archive_dir.resolve()}"
+        log_to_file_only(logging.ERROR, error_msg)
+        console.print(f"[bold red]{error_msg}[/bold red]")
         return
 
     # 获取所有 .txt 文件并排序 / Get all .txt files and sort them
     txt_files = sorted([f for f in archive_dir.glob("*.txt")])
     if not txt_files:
-        console.print(f"[yellow]📭 {archive_dir} 下没有 .txt 文件[/yellow]")
+        warn_msg = f"📭 {archive_dir} 下没有 .txt 文件"
+        log_to_file_only(logging.WARNING, warn_msg)
+        console.print(f"[yellow]{warn_msg}[/yellow]")
         return
 
-    console.print(f"\n[bold cyan]🔍 发现[/bold cyan] [yellow]{len(txt_files)} 个 .txt 文件[/yellow]，[bold cyan]开始批量分析...[/bold cyan]\n")
+    info_msg = f"🔍 发现 {len(txt_files)} 个 .txt 文件，开始批量分析..."
+    log_to_file_only(logging.INFO, info_msg)
+    # 控制台美化输出，不重复日志 / Beautified console output, no duplicate log
+    console.print(
+        f"\n[bold cyan]🔍 发现[/bold cyan] [yellow]{len(txt_files)} 个 .txt 文件[/yellow]，[bold cyan]开始批量分析...[/bold cyan]\n"
+    )
 
     all_stats = []
     grand_total_records = 0
@@ -162,8 +177,8 @@ def doi_checker(archive_dir: Path):
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         console=console,
     ) as progress:
-        task = progress.add_task("[cyan]📄 处理文件[/cyan]", total=len(txt_files))
-        
+        task = progress.add_task("[cyan]✅ 处理文件[/cyan]", total=len(txt_files))
+
         for file_path in txt_files:
             stats = _analyze_file(file_path)
             if stats is None:
@@ -191,60 +206,113 @@ def doi_checker(archive_dir: Path):
                             doi_file_map[doi][file_path.name] = 0
                         doi_file_map[doi][file_path.name] += 1
 
+            # 更新进度条 / Update progress bar
+            progress.update(task, advance=1)
+            
+            # 显示该文件的基本信息（无论是否有缺失）/ Display this file's basic info (whether missing or not)
+            progress.print()  # 空行分隔 / Empty line separator
+            
+            # 显示文件信息和累计总数 / Display file info and cumulative total
+            file_info_msg = f"📄 {file_path.name}: {stats['total_records']} 条记录 (累计: {grand_total_records} 条)"
+            progress.print(f"[cyan]{file_info_msg}[/cyan]")
+            
             # 如果该文件有缺失，打印详情 / If this file has missing DOIs, print details
             if stats["missing_count"] > 0:
-                console.print(f"   [red]❌ {stats['missing_count']} 条记录缺失 DOI[/red]")
+                error_msg = f"   ❌ {stats['missing_count']} 条记录缺失 DOI"
+                log_to_file_only(logging.WARNING, error_msg)
                 for idx, content in stats["missing_details"]:
-                    console.print(Panel(
+                    panel = Panel(
                         content,
                         title=f"[yellow]{file_path.name}[/yellow] | [red]无 DOI 记录 #{idx}[/red]",
                         border_style="red",
                         expand=False,
-                    ))
+                    )
+                    # 格式化多行内容，每行添加缩进 / Format multi-line content with indentation
+                    formatted_content = "\n".join(
+                        f"    {line}" for line in content.split("\n")
+                    )
+                    log_to_file_only(
+                        logging.WARNING,
+                        f"无 DOI 记录: {file_path.name} #{idx}\n{formatted_content}",
+                    )
+                    progress.print(panel)
             else:
-                console.print(f"   [green]✅ 全部 {stats['total_records']} 条记录均有 DOI[/green]")
-
-            progress.update(task, advance=1)
+                success_msg = f"   ✅ 全部 {stats['total_records']} 条记录均有 DOI"
+                log_to_file_only(logging.INFO, success_msg)
+            
+            # 空一行分隔 / Empty line separator
+            progress.print()
 
     # === 最终汇总 / Final Summary ===
     unique_dois = len(set(all_dois))  # 唯一 DOI 数量 / Unique DOI count
-    
+
     # 创建汇总表格 / Create summary table
-    summary_table = Table(title="📊 批量分析汇总 / Batch Analysis Summary", box=box.ROUNDED)
+    summary_table = Table(
+        title="📊 批量分析汇总 / Batch Analysis Summary", box=box.ROUNDED
+    )
     summary_table.add_column("项目 / Item", style="cyan", no_wrap=True)
     summary_table.add_column("数值 / Value", style="magenta", justify="right")
-    
+
     summary_table.add_row("📁 文件总数 / Total Files", f"{len(txt_files)}")
     summary_table.add_row("📚 总文献记录数 / Total Records", f"{grand_total_records}")
-    summary_table.add_row("✅ 总有效 DOI 数（含重复）/ Total DOIs (with duplicates)", f"{grand_total_dois}")
-    summary_table.add_row("🔑 唯一 DOI 数 / Unique DOIs", f"[green]{unique_dois}[/green]")
-    summary_table.add_row("❌ 总缺失 DOI 数 / Missing DOIs", f"[red]{grand_missing}[/red]")
-    
+    summary_table.add_row(
+        "✅ 总有效 DOI 数（含重复）/ Total DOIs (with duplicates)",
+        f"{grand_total_dois}",
+    )
+    summary_table.add_row(
+        "🔑 唯一 DOI 数 / Unique DOIs", f"[green]{unique_dois}[/green]"
+    )
+    summary_table.add_row(
+        "❌ 总缺失 DOI 数 / Missing DOIs", f"[red]{grand_missing}[/red]"
+    )
+
     if grand_total_records > 0:
         coverage = grand_total_dois / grand_total_records * 100
-        coverage_color = "green" if coverage >= 95 else "yellow" if coverage >= 80 else "red"
-        summary_table.add_row("📈 DOI 覆盖率 / DOI Coverage", f"[{coverage_color}]{coverage:.2f}%[/{coverage_color}]")
-    
+        coverage_color = (
+            "green" if coverage >= 95 else "yellow" if coverage >= 80 else "red"
+        )
+        summary_table.add_row(
+            "📈 DOI 覆盖率 / DOI Coverage",
+            f"[{coverage_color}]{coverage:.2f}%[/{coverage_color}]",
+        )
+
+    # 记录汇总信息到日志（只写入文件，不显示在控制台，避免与表格重复） / Log summary to file only (not shown in console to avoid duplication with table)
+    log_to_file_only(logging.INFO, "=" * 70)
+    log_to_file_only(logging.INFO, "📊 批量分析汇总:")
+    log_to_file_only(logging.INFO, f"📁 文件总数: {len(txt_files)}")
+    log_to_file_only(logging.INFO, f"📚 总文献记录数: {grand_total_records}")
+    log_to_file_only(logging.INFO, f"✅ 总有效 DOI 数（含重复）: {grand_total_dois}")
+    log_to_file_only(logging.INFO, f"🔑 唯一 DOI 数: {unique_dois}")
+    log_to_file_only(logging.INFO, f"❌ 总缺失 DOI 数: {grand_missing}")
+    if grand_total_records > 0:
+        coverage = grand_total_dois / grand_total_records * 100
+        log_to_file_only(logging.INFO, f"📈 DOI 覆盖率: {coverage:.2f}%")
+    log_to_file_only(logging.INFO, "=" * 70)
+
+    # 控制台只显示表格，不显示日志 / Console only shows table, no log output
     console.print()
     console.print(summary_table)
 
     # 检查并打印重复 DOI 详情 / Check and print duplicate DOI details
     if grand_total_dois > unique_dois:
         duplicates = grand_total_dois - unique_dois
-        console.print(f"\n[bold yellow]🔄 发现 {duplicates} 个重复 DOI:[/bold yellow]")
-        
+        dup_msg = f"🔄 发现 {duplicates} 个重复 DOI:"
+        log_to_file_only(logging.INFO, dup_msg)
+        # 控制台美化输出 / Beautified console output
+        console.print(f"\n[bold yellow]{dup_msg}[/bold yellow]")
+
         # 找出有重复的 DOI（跨文件重复或同一文件内重复）/ Find DOIs with duplicates (across files or within same file)
         duplicate_dois = {
             doi: file_counts
             for doi, file_counts in doi_file_map.items()
             if sum(file_counts.values()) > 1  # 总出现次数 > 1
         }
-        
+
         # 创建重复 DOI 表格 / Create duplicate DOI table
         dup_table = Table(box=box.SIMPLE)
         dup_table.add_column("DOI", style="cyan")
         dup_table.add_column("详情 / Details", style="yellow")
-        
+
         for doi, file_counts in sorted(duplicate_dois.items()):
             total_count = sum(file_counts.values())
             file_list = []
@@ -253,14 +321,23 @@ def doi_checker(archive_dir: Path):
                     file_list.append(f"{filename} ([red]出现 {count} 次[/red])")
                 else:
                     file_list.append(filename)
-            
+
             if len(file_counts) > 1:
                 details = f"跨 [cyan]{len(file_counts)}[/cyan] 个文件，共出现 [red]{total_count}[/red] 次: {', '.join(file_list)}"
             else:
                 details = f"在同一文件中出现 [red]{total_count}[/red] 次: {', '.join(file_list)}"
-            
+
             dup_table.add_row(f"[bold]{doi}[/bold]", details)
-        
+            # 移除 Rich 标记后只记录到文件 / Remove Rich markup and log to file only
+            clean_details = (
+                details.replace("[red]", "")
+                .replace("[/red]", "")
+                .replace("[cyan]", "")
+                .replace("[/cyan]", "")
+            )
+            log_to_file_only(logging.INFO, f"重复 DOI: {doi} - {clean_details}")
+
+        # 控制台只显示表格，不显示日志 / Console only shows table, no log output
         console.print(dup_table)
 
 
@@ -276,7 +353,7 @@ def doi_extractor(archive_dir: Path) -> list[str]:
         list[str]: DOI 列表（已去重）/ List of unique DOIs
     """
     console = Console()
-    
+
     if not archive_dir.exists():
         return []
 
@@ -297,6 +374,11 @@ def doi_extractor(archive_dir: Path) -> list[str]:
 
     # 去重（不保持顺序，提升性能）/ Remove duplicates (order not preserved for performance)
     unique_dois = list(set(dois))
-    
-    console.print(f"[bold cyan]🔍 发现[/bold cyan] [green]{len(unique_dois)} 个有效 DOI[/green]")
+
+    info_msg = f"🔍 发现 {len(unique_dois)} 个有效 DOI"
+    logger = logging.getLogger("doihive")
+    log_to_file_only(logging.INFO, info_msg)
+    # 控制台美化输出，不重复日志 / Beautified console output, no duplicate log
+    console = Console()
+    console.print(f"[bold cyan]{info_msg}[/bold cyan]")
     return unique_dois

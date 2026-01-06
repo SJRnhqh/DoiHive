@@ -1,6 +1,13 @@
 # python/utils/hive.py
 # External dependencies / 外部依赖
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn, TimeElapsedColumn
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    BarColumn,
+    TextColumn,
+    TimeRemainingColumn,
+    TimeElapsedColumn,
+)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urljoin, urlparse
 from rich.console import Console
@@ -11,9 +18,14 @@ from rich.table import Table
 from pathlib import Path
 from rich import box
 import requests
+import logging
 import json
 import time
 import re
+
+
+# Local modules / 本地模块
+from .logger import log_to_file_only
 
 
 def pdf_hive(
@@ -56,10 +68,21 @@ def pdf_hive(
     }
 
     # 创建 Rich 控制台 / Create Rich console
+    logger = logging.getLogger("doihive")
     console = Console()
     
-    console.print(f"\n[bold cyan]📚 开始批量下载[/bold cyan] [yellow]共 {stats['total']} 个 URL[/yellow]")
-    console.print(f"[bold cyan]🔧 使用[/bold cyan] [yellow]{max_workers} 个并发线程[/yellow]\n")
+    info_msg = f"📚 开始批量下载，共 {stats['total']} 个 URL"
+    log_to_file_only(logging.INFO, info_msg)
+    # 控制台美化输出，不重复日志 / Beautified console output, no duplicate log
+    console.print(
+        f"\n[bold cyan]📚 开始批量下载[/bold cyan] [yellow]共 {stats['total']} 个 URL[/yellow]"
+    )
+
+    worker_msg = f"🔧 使用 {max_workers} 个并发线程"
+    log_to_file_only(logging.INFO, worker_msg)
+    console.print(
+        f"[bold cyan]🔧 使用[/bold cyan] [yellow]{max_workers} 个并发线程[/yellow]\n"
+    )
 
     # 记录开始时间 / Record start time
     start_time = time.time()
@@ -183,7 +206,73 @@ def pdf_hive(
                 ensure_ascii=False,
                 indent=2,
             )
-        console.print(f"\n[bold yellow]📝 错误日志已保存到:[/bold yellow] [cyan]{error_log_path}[/cyan]")
+        error_log_msg = f"📝 错误日志已保存到: {error_log_path}"
+        log_to_file_only(logging.WARNING, error_log_msg)
+
+        # 记录所有错误到日志文件 / Log all errors to file
+        for error in stats["errors"]:
+            log_to_file_only(
+                logging.ERROR,
+                f"下载失败 - DOI: {error.get('doi', 'N/A')}, URL: {error.get('url', 'N/A')}, 错误: {error.get('error', 'N/A')}",
+            )
+
+        # 控制台用 Rich 表格展示错误 / Display errors in Rich table on console
+        console.print(
+            f"\n[bold yellow]📝 错误日志已保存到:[/bold yellow] [cyan]{error_log_path}[/cyan]"
+        )
+
+        # 按错误类型分组统计 / Group errors by error type
+        error_groups = {}
+        for error in stats["errors"]:
+            error_msg = error.get("error", "未知错误")
+            # 提取错误类型（去除动态部分）/ Extract error type (remove dynamic parts)
+            error_type = error_msg
+            # 对于包含冒号的错误，提取前缀作为类型 / For errors with colons, extract prefix as type
+            if ":" in error_msg:
+                error_type = error_msg.split(":", 1)[0]
+            
+            if error_type not in error_groups:
+                error_groups[error_type] = []
+            error_groups[error_type].append(error)
+
+        # 创建错误汇总表格 / Create error summary table
+        error_table = Table(
+            title=f"❌ 下载失败汇总 / Download Error Summary ({len(stats['errors'])} 个错误，{len(error_groups)} 种类型)",
+            box=box.ROUNDED,
+        )
+        error_table.add_column(
+            "错误类型", style="red", no_wrap=False, width=40
+        )
+        error_table.add_column(
+            "数量", style="yellow", justify="right", width=8, no_wrap=True
+        )
+        error_table.add_column(
+            "示例 DOI", style="cyan", no_wrap=False, width=35
+        )
+
+        # 按数量降序排序 / Sort by count in descending order
+        sorted_groups = sorted(
+            error_groups.items(), key=lambda x: len(x[1]), reverse=True
+        )
+
+        for error_type, errors in sorted_groups:
+            count = len(errors)
+            # 收集示例 DOI（最多3个）/ Collect example DOIs (max 3)
+            example_dois = []
+            for error in errors[:3]:
+                doi = error.get("doi", "N/A")
+                if len(doi) > 30:
+                    doi = doi[:27] + "..."
+                example_dois.append(doi)
+            
+            example_str = ", ".join(example_dois)
+            if count > 3:
+                example_str += f" ... (共 {count} 个)"
+            
+            error_table.add_row(error_type, str(count), example_str)
+
+        console.print()
+        console.print(error_table)
 
     # 格式化文件大小 / Format file size
     def format_size(size_bytes):
@@ -207,30 +296,66 @@ def pdf_hive(
             return f"{hours:.2f} 小时"
 
     # 创建统计表格 / Create statistics table
-    table = Table(title="📊 下载汇总统计 / Download Summary Statistics", box=box.ROUNDED)
+    table = Table(
+        title="📊 下载汇总统计 / Download Summary Statistics", box=box.ROUNDED
+    )
     table.add_column("项目 / Item", style="cyan", no_wrap=True)
     table.add_column("数值 / Value", style="magenta", justify="right")
-    
+
     table.add_row("📁 总计 / Total", f"{stats['total']:>6} 个文件")
     table.add_row("✅ 成功 / Success", f"[green]{stats['success']:>6}[/green] 个文件")
     table.add_row("⏭️  跳过 / Skipped", f"[yellow]{stats['skip']:>6}[/yellow] 个文件")
     table.add_row("❌ 失败 / Failed", f"[red]{stats['failed']:>6}[/red] 个文件")
     table.add_section()
-    
+
     if stats["total"] > 0:
         success_rate = (stats["success"] / stats["total"]) * 100
-        table.add_row("📈 成功率 / Success Rate", f"[green]{success_rate:>5.2f}%[/green]")
+        table.add_row(
+            "📈 成功率 / Success Rate", f"[green]{success_rate:>5.2f}%[/green]"
+        )
     if stats["total_size"] > 0:
-        table.add_row("💾 总大小 / Total Size", f"[cyan]{format_size(stats['total_size'])}[/cyan]")
+        table.add_row(
+            "💾 总大小 / Total Size", f"[cyan]{format_size(stats['total_size'])}[/cyan]"
+        )
     table.add_section()
-    
-    table.add_row("⏱️  总耗时 / Total Time", f"[yellow]{format_time(total_time)}[/yellow]")
+
+    table.add_row(
+        "⏱️  总耗时 / Total Time", f"[yellow]{format_time(total_time)}[/yellow]"
+    )
     if stats["download_times"]:
-        table.add_row("⚡ 平均耗时 / Avg Time", f"[yellow]{format_time(avg_time)}[/yellow]")
+        table.add_row(
+            "⚡ 平均耗时 / Avg Time", f"[yellow]{format_time(avg_time)}[/yellow]"
+        )
         if stats["success_times"]:
             avg_success_time = sum(stats["success_times"]) / len(stats["success_times"])
-            table.add_row("🚀 成功平均 / Success Avg", f"[green]{format_time(avg_success_time)}[/green]")
-    
+            table.add_row(
+                "🚀 成功平均 / Success Avg",
+                f"[green]{format_time(avg_success_time)}[/green]",
+            )
+
+    # 记录统计信息到日志（只写入文件，不显示在控制台，避免与表格重复） / Log statistics to file only (not shown in console to avoid duplication with table)
+    log_to_file_only(logging.INFO, "=" * 70)
+    log_to_file_only(logging.INFO, "📊 下载汇总统计:")
+    log_to_file_only(logging.INFO, f"📁 总计: {stats['total']} 个文件")
+    log_to_file_only(logging.INFO, f"✅ 成功: {stats['success']} 个文件")
+    log_to_file_only(logging.INFO, f"⏭️  跳过: {stats['skip']} 个文件")
+    log_to_file_only(logging.INFO, f"❌ 失败: {stats['failed']} 个文件")
+    if stats["total"] > 0:
+        success_rate = (stats["success"] / stats["total"]) * 100
+        log_to_file_only(logging.INFO, f"📈 成功率: {success_rate:.2f}%")
+    if stats["total_size"] > 0:
+        log_to_file_only(logging.INFO, f"💾 总大小: {format_size(stats['total_size'])}")
+    log_to_file_only(logging.INFO, f"⏱️  总耗时: {format_time(total_time)}")
+    if stats["download_times"]:
+        log_to_file_only(logging.INFO, f"⚡ 平均耗时: {format_time(avg_time)}")
+        if stats["success_times"]:
+            avg_success_time = sum(stats["success_times"]) / len(stats["success_times"])
+            log_to_file_only(
+                logging.INFO, f"🚀 成功平均: {format_time(avg_success_time)}"
+            )
+    log_to_file_only(logging.INFO, "=" * 70)
+
+    # 控制台只显示表格，不显示日志 / Console only shows table, no log output
     console.print()
     console.print(table)
 
