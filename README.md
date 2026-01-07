@@ -1,6 +1,6 @@
 # 🐝 DoiHive
 
-![DoiHive Logo](image/DoiHive.png)
+![DoiHive Logo](image/DoiHive-logo.png)
 
 > **A cross-language (Python/Go) tool for batch downloading academic PDFs from DOIs**
 >
@@ -15,6 +15,8 @@
 DoiHive automates the process of extracting DOIs from bibliographic data files and downloading corresponding PDFs. The project aims to eventually support automatic DOI retrieval from search queries, but currently focuses on processing existing DOI data.
 
 **Current Status**: Both Python and Go implementations are complete with core functionality. Go version offers superior performance for large-scale downloads.
+
+![DoiHive Workflow](image/DoiHive.png)
 
 ## Features
 

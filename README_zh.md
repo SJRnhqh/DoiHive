@@ -1,6 +1,6 @@
 # 🐝 DoiHive
 
-![DoiHive Logo](image/DoiHive.png)
+![DoiHive Logo](image/DoiHive-logo.png)
 
 > **一个跨语言（Python/Go）的学术 PDF 批量下载工具**
 >
@@ -15,6 +15,8 @@
 DoiHive 自动化了从文献数据文件中提取 DOI 并下载对应 PDF 的过程。项目最终目标是支持从搜索查询自动获取 DOI，但目前专注于处理已有的 DOI 数据。
 
 **当前状态**：Python 和 Go 实现均已完成核心功能。Go 版本在大规模下载场景下性能更优。
+
+![DoiHive 工作流程](image/DoiHive.png)
 
 ## 功能特性
 
