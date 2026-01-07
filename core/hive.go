@@ -318,7 +318,7 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 	bar := progressbar.NewOptions(
 		len(filteredURLs),
 		progressbar.OptionSetWriter(os.Stderr),
-		progressbar.OptionSetWidth(40),
+		progressbar.OptionSetWidth(30),
 		progressbar.OptionShowCount(),
 		progressbar.OptionSetDescription("📥 下载中"),
 		progressbar.OptionSetTheme(progressbar.Theme{
@@ -328,8 +328,7 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 			BarStart:      "│",
 			BarEnd:        "│",
 		}),
-		progressbar.OptionShowElapsedTimeOnFinish(),
-		progressbar.OptionSetPredictTime(true),
+		progressbar.OptionSetPredictTime(false), // 禁用默认的时间预估，我们自己显示
 		progressbar.OptionSetRenderBlankState(true),
 		progressbar.OptionOnCompletion(func() {
 			fmt.Fprint(os.Stderr, "\n")
@@ -337,7 +336,9 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 	)
 
 	// 收集结果
+	processed := 0
 	for result := range results {
+		processed++
 		// 记录所有任务的时间（包括成功、失败、跳过）
 		stats.AllTimes = append(stats.AllTimes, result.Duration)
 
@@ -361,8 +362,18 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 		// 更新进度条（在统计更新后）
 		bar.Add(1)
 
-		// 更新进度条描述以显示实时统计（添加间距避免重叠）
-		desc := fmt.Sprintf("📥 ✅ %-3d ⏭️ %-3d ❌ %-3d", stats.Success, stats.Skip, stats.Failed)
+		// 计算已用时间和预估剩余时间
+		elapsed := time.Since(startTime)
+		remaining := time.Duration(0)
+		if processed > 0 {
+			avgTime := elapsed / time.Duration(processed)
+			remaining = avgTime * time.Duration(len(filteredURLs)-processed)
+		}
+
+		// 更新进度条描述：统计 + 时间（已用/剩余）
+		desc := fmt.Sprintf("✅ %-3d  ❌ %-3d  ⏱️ %-6s  ⏳ %s",
+			stats.Success, stats.Failed,
+			formatShortDuration(elapsed), formatShortDuration(remaining))
 		bar.Describe(desc)
 	}
 	stats.TotalTime = time.Since(startTime)
@@ -846,6 +857,25 @@ func extractPDFURL(doc *goquery.Document, htmlContent string, baseURL string) st
 	}
 
 	return ""
+}
+
+// formatShortDuration 格式化时间为简短形式（用于进度条显示）
+func formatShortDuration(d time.Duration) string {
+	if d < time.Second {
+		return "0s"
+	} else if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	} else if d < time.Hour {
+		m := int(d.Minutes())
+		s := int(d.Seconds()) % 60
+		if s == 0 {
+			return fmt.Sprintf("%dm", m)
+		}
+		return fmt.Sprintf("%dm%ds", m, s)
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh%dm", h, m)
 }
 
 // resolveURL 解析相对 URL 为绝对 URL（类似 Python 的 urljoin）
