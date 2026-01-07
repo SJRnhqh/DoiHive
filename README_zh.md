@@ -22,9 +22,12 @@ DoiHive 自动化了从文献数据文件中提取 DOI 并下载对应 PDF 的�
 - ✅ 从 Sci-Hub 批量下载 PDF
 - ✅ 高性能并发下载（Python 多线程，Go goroutines）
 - ✅ **403 防护机制**：完善的浏览器请求头、随机延迟、自动重试机制
+- ✅ **验证码绕过**：使用无头浏览器自动绕过机器人验证（Go）
 - ✅ **Gzip 解压缩**：自动处理压缩响应
 - ✅ **智能错误处理**：详细的错误信息和调试支持
 - ✅ **实时进度条**：显示下载进度和实时成功/跳过/失败统计（Go）
+- ✅ **日志持久化**：下载日志、失败 DOI 列表、重试列表保存到文件（Go）
+- ✅ **直接下载模式**：直接从 DOI 字符串或文件下载 PDF（Go）
 - ✅ 完善的错误日志和报告
 - ✅ 美观的控制台输出和进度跟踪（Python）
 - ✅ 详细的统计信息和摘要
@@ -49,6 +52,7 @@ DoiHive 自动化了从文献数据文件中提取 DOI 并下载对应 PDF 的�
 - **Go 1.25+**
 - `github.com/PuerkitoBio/goquery` - 用于提取 PDF URL 的 HTML 解析
 - `github.com/schollz/progressbar/v3` - 实时进度条和统计信息
+- `github.com/chromedp/chromedp` - 无头浏览器用于验证码绕过
 - 高性能 goroutines 并发下载
 - HTTP 连接池优化性能
 - 跨平台编译支持
@@ -142,24 +146,38 @@ DoiHive 自动化了从文献数据文件中提取 DOI 并下载对应 PDF 的�
 3. **命令行参数**：
 
     ```bash
-    -a, --archive <path>    Archive 目录路径（必需）
+    # Archive 模式（从 WoS 文件提取 DOI）
+    -a, --archive <path>    Archive 目录路径
     -b, --budget <number>   限制下载的 DOI 数量（默认：全部）
     -w, --workers <number>  并发 workers 数量（默认：3）
     -pdf <path>             PDF 输出目录（默认：./pdf）
+
+    # 直接下载模式
+    -download               启用直接下载模式
+    -doi <string>           要下载的 DOI（逗号分隔）
+    -input <path>           包含 DOI 的文件（每行一个）
+    -output <path>          PDF 输出目录（默认：./pdf）
+
     -help                   显示帮助信息
     ```
 
     **示例**：
 
     ```bash
-    # 使用默认设置下载所有 DOI（3 个 workers，安全避免 403）
+    # Archive 模式：使用默认设置下载所有 DOI
     ./bin/doihive-darwin-arm64 -a archive
 
-    # 下载前 100 个 DOI，使用 4 个 workers（仍然安全）
+    # Archive 模式：下载前 100 个 DOI，使用 4 个 workers
     ./bin/doihive-darwin-arm64 -a archive -b 100 -w 4
 
-    # 下载到自定义目录
-    ./bin/doihive-darwin-arm64 -a archive -pdf ./downloads
+    # 直接下载：单个 DOI
+    ./bin/doihive-darwin-arm64 -download -doi "10.1021/acs.jctc.7b00300" -output pdf
+
+    # 直接下载：多个 DOI
+    ./bin/doihive-darwin-arm64 -download -doi "10.1021/xxx,10.1039/yyy" -output pdf
+
+    # 直接下载：从 DOI 列表文件（例如重试失败的 DOI）
+    ./bin/doihive-darwin-arm64 -download -input pdf/logs/retry_dois.txt -output pdf
 
     # 对于大批量下载，可以增加 workers（但可能增加 403 风险）
     ./bin/doihive-darwin-arm64 -a archive -b 1000 -w 8
@@ -167,7 +185,11 @@ DoiHive 自动化了从文献数据文件中提取 DOI 并下载对应 PDF 的�
 
 4. **输出**：
    - PDF 文件保存到 `pdf/` 目录（或指定目录）
-   - 失败的 HTML 页面保存到 `pdf/debug/` 用于调试
+   - 失败的 HTML 页面保存到 `pdf/debug/` 用于调试（仅保存未知错误）
+   - **日志文件**保存到 `pdf/logs/`：
+     - `download_log_<时间戳>.txt` - 完整下载日志
+     - `failed_dois_<时间戳>.txt` - 失败 DOI 详细信息
+     - `retry_dois_<时间戳>.txt` - 纯 DOI 列表（方便重试）
    - **实时进度条**显示下载进度和实时成功/跳过/失败统计
    - 错误信息显示在控制台
    - 详细统计信息，包括吞吐量和平均墙钟时间
@@ -176,6 +198,15 @@ DoiHive 自动化了从文献数据文件中提取 DOI 并下载对应 PDF 的�
 
     ```shell
     📥 下载中 [✅5 ⏭️0 ❌2] [=========>--------] 7/20 35% 2.3 it/s
+    ```
+
+    **日志文件示例**：
+
+    ```shell
+    📝 日志文件已保存:
+      📄 完整日志: pdf/logs/download_log_2026-01-07_20-22-06.txt
+      ❌ 失败详情: pdf/logs/failed_dois_2026-01-07_20-22-06.txt
+      🔄 重试列表: pdf/logs/retry_dois_2026-01-07_20-22-06.txt
     ```
 
 ### 工作流程
@@ -230,10 +261,13 @@ DoiHive/
 │   └── main.go            # 主入口点（CLI）
 ├── core/                  # Go 核心逻辑
 │   ├── check.go           # DOI 检查和提取
-│   └── hive.go            # PDF 下载逻辑
+│   ├── hive.go            # PDF 下载逻辑（含验证码绕过）
+│   └── logger.go          # 日志持久化
 ├── bin/                   # 编译后的二进制文件（生成）
 ├── archive/               # 输入：WoS TXT 文件
 ├── pdf/                   # 输出：下载的 PDF
+│   ├── logs/              # 输出：下载日志（Go）
+│   └── debug/             # 输出：调试 HTML 文件
 ├── error/                 # 输出：错误日志（Python）
 ├── logs/                  # 输出：应用日志（Python）
 ├── build.sh               # 跨平台编译脚本
@@ -251,9 +285,12 @@ DoiHive/
 - [x] 多线程批量下载 PDF（Python）
 - [x] 高性能 goroutines 并发下载（Go）
 - [x] **403 防护机制**：完善的浏览器请求头、随机延迟、重试机制
+- [x] **验证码绕过**：使用无头浏览器自动绕过机器人验证（Go）
 - [x] **Gzip 解压缩**：自动处理压缩的 HTML/PDF 响应
 - [x] **智能错误检测**：识别不可用文章、验证码页面等
 - [x] **实时进度条**：显示下载进度和实时统计（Go）
+- [x] **日志持久化**：下载日志、失败 DOI 列表、重试列表（Go）
+- [x] **直接下载模式**：从 DOI 字符串或文件直接下载（Go）
 - [x] 错误处理和日志记录
 - [x] 美观的控制台输出和进度跟踪（Python）
 - [x] 详细的统计信息和摘要
@@ -261,16 +298,14 @@ DoiHive/
 - [x] 可配置的并发数和下载限制
 - [x] 性能指标（吞吐量、平均墙钟时间等）
 - [x] 跨平台编译支持（Go）
-- [x] 调试 HTML 保存功能
+- [x] 调试 HTML 保存功能（仅保存未知错误）
 
 ### 🚧 进行中 / 计划中
 
 - [ ] 从搜索查询自动获取 DOI
 - [ ] 支持其他文献数据源（除 WoS 外）
 - [ ] 配置文件支持
-- [ ] 恢复中断的下载
 - [ ] 多个 Sci-Hub 镜像支持
-- [ ] 大规模下载的进度持久化
 - [ ] 分布式处理支持
 
 ### 🎯 未来目标

@@ -22,9 +22,12 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 - ✅ Batch download PDFs from Sci-Hub
 - ✅ High-performance concurrent downloads (multi-threading in Python, goroutines in Go)
 - ✅ **Anti-403 protection**: Complete browser headers, random delays, automatic retry mechanism
+- ✅ **CAPTCHA bypass**: Automatic robot verification bypass using headless browser (Go)
 - ✅ **Gzip decompression**: Automatic handling of compressed responses
 - ✅ **Smart error handling**: Detailed error messages and debugging support
 - ✅ **Real-time progress bar**: Live progress tracking with success/skip/failed counts (Go)
+- ✅ **Log persistence**: Download logs, failed DOIs, and retry lists saved to files (Go)
+- ✅ **Direct download mode**: Download PDFs directly from DOI strings or files (Go)
 - ✅ Comprehensive error logging and reporting
 - ✅ Beautiful console output with progress tracking (Python)
 - ✅ Detailed statistics and summaries
@@ -49,6 +52,7 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 - **Go 1.25+**
 - `github.com/PuerkitoBio/goquery` - HTML parsing for PDF URL extraction
 - `github.com/schollz/progressbar/v3` - Real-time progress bar with live statistics
+- `github.com/chromedp/chromedp` - Headless browser for CAPTCHA bypass
 - High-performance goroutines for concurrent downloads
 - HTTP connection pooling for optimal performance
 - Cross-platform compilation support
@@ -142,24 +146,38 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 3. **Command-line Options**:
 
     ```bash
-    -a, --archive <path>    Archive directory path (required)
+    # Archive mode (extract DOIs from WoS files)
+    -a, --archive <path>    Archive directory path
     -b, --budget <number>   Limit number of DOIs to download (default: all)
     -w, --workers <number>  Number of concurrent workers (default: 3)
     -pdf <path>             PDF output directory (default: ./pdf)
+
+    # Direct download mode
+    -download               Enable direct download mode
+    -doi <string>           DOI(s) to download (comma-separated)
+    -input <path>           File containing DOIs (one per line)
+    -output <path>          PDF output directory (default: ./pdf)
+
     -help                   Show help message
     ```
 
     **Examples**:
 
     ```bash
-    # Download all DOIs with default settings (3 workers, safe for avoiding 403)
+    # Archive mode: Download all DOIs with default settings
     ./bin/doihive-darwin-arm64 -a archive
 
-    # Download first 100 DOIs with 4 workers (still safe)
+    # Archive mode: Download first 100 DOIs with 4 workers
     ./bin/doihive-darwin-arm64 -a archive -b 100 -w 4
 
-    # Download to custom directory
-    ./bin/doihive-darwin-arm64 -a archive -pdf ./downloads
+    # Direct download: Single DOI
+    ./bin/doihive-darwin-arm64 -download -doi "10.1021/acs.jctc.7b00300" -output pdf
+
+    # Direct download: Multiple DOIs
+    ./bin/doihive-darwin-arm64 -download -doi "10.1021/xxx,10.1039/yyy" -output pdf
+
+    # Direct download: From DOI list file (e.g., retry failed DOIs)
+    ./bin/doihive-darwin-arm64 -download -input pdf/logs/retry_dois.txt -output pdf
 
     # For very large batches, you can increase workers (but may risk 403)
     ./bin/doihive-darwin-arm64 -a archive -b 1000 -w 8
@@ -167,15 +185,28 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 
 4. **Output**:
     - PDFs are saved to `pdf/` directory (or specified directory)
-    - Failed HTML pages saved to `pdf/debug/` for troubleshooting
+    - Failed HTML pages saved to `pdf/debug/` for troubleshooting (only for unexpected errors)
+    - **Log files** saved to `pdf/logs/`:
+      - `download_log_<timestamp>.txt` - Complete download log
+      - `failed_dois_<timestamp>.txt` - Detailed failed DOI information
+      - `retry_dois_<timestamp>.txt` - DOI-only list for easy retry
     - **Real-time progress bar** showing download progress with live success/skip/failed counts
     - Error information displayed in console
     - Detailed statistics including throughput and average wall-clock time
 
     **Progress Bar Example**:
 
-    ``` shell
+    ```shell
     📥 下载中 [✅5 ⏭️0 ❌2] [=========>--------] 7/20 35% 2.3 it/s
+    ```
+
+    **Log Files Example**:
+
+    ```shell
+    📝 日志文件已保存:
+      📄 完整日志: pdf/logs/download_log_2026-01-07_20-22-06.txt
+      ❌ 失败详情: pdf/logs/failed_dois_2026-01-07_20-22-06.txt
+      🔄 重试列表: pdf/logs/retry_dois_2026-01-07_20-22-06.txt
     ```
 
 ### Workflow
@@ -230,10 +261,13 @@ DoiHive/
 │   └── main.go            # Main entry point (CLI)
 ├── core/                  # Go core logic
 │   ├── check.go           # DOI checking and extraction
-│   └── hive.go            # PDF download logic
+│   ├── hive.go            # PDF download logic (with CAPTCHA bypass)
+│   └── logger.go          # Log persistence
 ├── bin/                   # Compiled binaries (generated)
 ├── archive/               # Input: WoS TXT files
 ├── pdf/                   # Output: Downloaded PDFs
+│   ├── logs/              # Output: Download logs (Go)
+│   └── debug/             # Output: Debug HTML files
 ├── error/                 # Output: Error logs (Python)
 ├── logs/                  # Output: Application logs (Python)
 ├── build.sh               # Cross-platform build script
@@ -251,9 +285,12 @@ DoiHive/
 - [x] Batch download PDFs with multi-threading (Python)
 - [x] High-performance concurrent downloads with goroutines (Go)
 - [x] **Anti-403 protection**: Complete browser headers, random delays, retry mechanism
+- [x] **CAPTCHA bypass**: Automatic robot verification using headless browser (Go)
 - [x] **Gzip decompression**: Automatic handling of compressed HTML/PDF responses
 - [x] **Smart error detection**: Identify unavailable articles, captcha pages, etc.
 - [x] **Real-time progress bar**: Live progress tracking with statistics (Go)
+- [x] **Log persistence**: Download logs, failed DOIs, retry lists (Go)
+- [x] **Direct download mode**: Download from DOI strings or files (Go)
 - [x] Error handling and logging
 - [x] Beautiful console output with progress tracking (Python)
 - [x] Comprehensive statistics and summaries
@@ -261,16 +298,14 @@ DoiHive/
 - [x] Configurable concurrency and download limits
 - [x] Performance metrics (throughput, average wall-clock time)
 - [x] Cross-platform compilation support (Go)
-- [x] Debug HTML saving for troubleshooting
+- [x] Debug HTML saving for troubleshooting (only for unexpected errors)
 
 ### 🚧 In Progress / Planned
 
 - [ ] Automatic DOI retrieval from search queries
 - [ ] Support for other bibliographic data sources (beyond WoS)
 - [ ] Configuration file support
-- [ ] Resume interrupted downloads
 - [ ] Multiple Sci-Hub mirror support
-- [ ] Progress persistence for large-scale downloads
 - [ ] Distributed processing support
 
 ### 🎯 Future Goals
