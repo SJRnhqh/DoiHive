@@ -29,6 +29,8 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 - ✅ **Smart error handling**: Detailed error messages and debugging support
 - ✅ **Real-time progress bar**: Live progress tracking with success/skip/failed counts (Go)
 - ✅ **Log persistence**: Download logs, failed DOIs, and retry lists saved to files (Go)
+- ✅ **DOI cache**: Skip processed DOIs without network requests (Go)
+- ✅ **Safe harvest script**: Gradual batch downloading with auto-stop on anomalies (Go)
 - ✅ **Direct download mode**: Download PDFs directly from DOI strings or files (Go)
 - ✅ Comprehensive error logging and reporting
 - ✅ Beautiful console output with progress tracking (Python)
@@ -224,10 +226,40 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 Both Python and Go implementations include comprehensive protection against 403 errors:
 
 - **Complete browser headers**: Full User-Agent, Accept, Accept-Language, and other headers to mimic real browsers
-- **Random delays**: 0.5-2.0 seconds before each request to avoid being flagged as a bot
+- **Random delays**: 1.0-4.0 seconds before each request to avoid being flagged as a bot
 - **Automatic retry**: Up to 3 retries with exponential backoff when encountering 403 errors
 - **Referer headers**: Added for PDF downloads to indicate source page
-- **Low concurrency by default**: Default 3 workers to minimize risk of triggering rate limits
+- **Low concurrency by default**: Default 2-3 workers to minimize risk of triggering rate limits
+
+### DOI Cache (Go)
+
+The Go version maintains two cache files in `pdf/` directory to skip processed DOIs **without any network requests**:
+
+- `downloaded.txt` - Successfully downloaded DOIs
+- `not_available.txt` - DOIs confirmed unavailable on Sci-Hub
+
+Benefits:
+- **Resume support**: Interrupt and continue anytime
+- **Reduced risk**: No repeated requests for known results
+- **Persistent**: Cache accumulates across runs
+
+### Safe Harvest Script (Go)
+
+For large-scale downloads, use `scripts/harvest.sh` for gradual, safe batch downloading:
+
+```bash
+# Default: 30 DOIs per batch, 60-180s random delay between batches
+./scripts/harvest.sh -a ./archive
+
+# Custom: 50 per batch, max 10 rounds, 2-5min delay
+./scripts/harvest.sh -a ./archive -b 50 -r 10 -d 120 -D 300
+```
+
+Features:
+- **Auto-stop**: Stops after 2 consecutive high-error rounds (≥80% errors with <2 successes)
+- **Random delays**: Mimics human behavior between batches
+- **Real-time output**: Stream progress bar and statistics
+- **Graceful exit**: `Ctrl+C` shows summary statistics
 
 **Recommended Settings**:
 
@@ -263,11 +295,15 @@ DoiHive/
 │   └── main.go            # Main entry point (CLI)
 ├── core/                  # Go core logic
 │   ├── check.go           # DOI checking and extraction
-│   ├── hive.go            # PDF download logic (with CAPTCHA bypass)
+│   ├── hive.go            # PDF download logic (with cache & anti-crawl)
 │   └── logger.go          # Log persistence
+├── scripts/               # Automation scripts
+│   └── harvest.sh         # Safe gradual batch download script
 ├── bin/                   # Compiled binaries (generated)
 ├── archive/               # Input: WoS TXT files
 ├── pdf/                   # Output: Downloaded PDFs
+│   ├── downloaded.txt     # Cache: successfully downloaded DOIs
+│   ├── not_available.txt  # Cache: unavailable DOIs on Sci-Hub
 │   ├── logs/              # Output: Download logs (Go)
 │   └── debug/             # Output: Debug HTML files
 ├── error/                 # Output: Error logs (Python)
@@ -292,6 +328,8 @@ DoiHive/
 - [x] **Smart error detection**: Identify unavailable articles, captcha pages, etc.
 - [x] **Real-time progress bar**: Live progress tracking with statistics (Go)
 - [x] **Log persistence**: Download logs, failed DOIs, retry lists (Go)
+- [x] **DOI cache**: Skip processed DOIs without network requests (Go)
+- [x] **Safe harvest script**: Gradual batch downloading with auto-stop (Go)
 - [x] **Direct download mode**: Download from DOI strings or files (Go)
 - [x] Error handling and logging
 - [x] Beautiful console output with progress tracking (Python)
