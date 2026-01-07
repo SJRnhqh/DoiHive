@@ -3,6 +3,7 @@
 package core
 
 import (
+	"bufio"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -19,6 +20,140 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/schollz/progressbar/v3"
 )
+
+// DOICache DOI 缓存，用于跳过已处理的 DOI
+type DOICache struct {
+	Downloaded   map[string]bool // 已成功下载的 DOI
+	NotAvailable map[string]bool // SciHub 上不可用的 DOI
+	pdfDir       string
+	mu           sync.RWMutex
+}
+
+// 缓存文件名常量
+const (
+	downloadedFile   = "downloaded.txt"
+	notAvailableFile = "not_available.txt"
+)
+
+// NewDOICache 创建并加载 DOI 缓存
+func NewDOICache(pdfDir string) (*DOICache, error) {
+	cache := &DOICache{
+		Downloaded:   make(map[string]bool),
+		NotAvailable: make(map[string]bool),
+		pdfDir:       pdfDir,
+	}
+
+	// 加载已下载的 DOI
+	downloadedPath := filepath.Join(pdfDir, downloadedFile)
+	if err := cache.loadFile(downloadedPath, cache.Downloaded); err != nil {
+		// 文件不存在不是错误，只是还没有缓存
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("加载 %s 失败: %v", downloadedFile, err)
+		}
+	}
+
+	// 加载不可用的 DOI
+	notAvailablePath := filepath.Join(pdfDir, notAvailableFile)
+	if err := cache.loadFile(notAvailablePath, cache.NotAvailable); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("加载 %s 失败: %v", notAvailableFile, err)
+		}
+	}
+
+	return cache, nil
+}
+
+// loadFile 从文件加载 DOI 列表
+func (c *DOICache) loadFile(path string, target map[string]bool) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// 跳过空行和注释
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		target[line] = true
+	}
+	return scanner.Err()
+}
+
+// IsDownloaded 检查 DOI 是否已下载
+func (c *DOICache) IsDownloaded(doi string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Downloaded[doi]
+}
+
+// IsNotAvailable 检查 DOI 是否在 SciHub 上不可用
+func (c *DOICache) IsNotAvailable(doi string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.NotAvailable[doi]
+}
+
+// ShouldSkip 检查 DOI 是否应该跳过（已下载或不可用）
+func (c *DOICache) ShouldSkip(doi string) (skip bool, reason string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.Downloaded[doi] {
+		return true, "已在缓存中（之前下载成功）"
+	}
+	if c.NotAvailable[doi] {
+		return true, "已在缓存中（SciHub 不可用）"
+	}
+	return false, ""
+}
+
+// AddDownloaded 添加已下载的 DOI（线程安全，即时写入文件）
+func (c *DOICache) AddDownloaded(doi string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.Downloaded[doi] {
+		return nil // 已存在，无需添加
+	}
+
+	c.Downloaded[doi] = true
+	return c.appendToFile(filepath.Join(c.pdfDir, downloadedFile), doi)
+}
+
+// AddNotAvailable 添加不可用的 DOI（线程安全，即时写入文件）
+func (c *DOICache) AddNotAvailable(doi string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.NotAvailable[doi] {
+		return nil // 已存在，无需添加
+	}
+
+	c.NotAvailable[doi] = true
+	return c.appendToFile(filepath.Join(c.pdfDir, notAvailableFile), doi)
+}
+
+// appendToFile 追加 DOI 到文件
+func (c *DOICache) appendToFile(path string, doi string) error {
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = fmt.Fprintf(file, "%s\n", doi)
+	return err
+}
+
+// GetStats 获取缓存统计
+func (c *DOICache) GetStats() (downloaded, notAvailable int) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.Downloaded), len(c.NotAvailable)
+}
 
 // DownloadResult 下载结果
 type DownloadResult struct {
@@ -58,12 +193,62 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 		return nil, fmt.Errorf("无法创建 PDF 目录: %v", err)
 	}
 
+	// 加载 DOI 缓存
+	cache, err := NewDOICache(pdfDir)
+	if err != nil {
+		return nil, fmt.Errorf("加载 DOI 缓存失败: %v", err)
+	}
+
+	// 显示缓存统计
+	downloadedCount, notAvailableCount := cache.GetStats()
+	if downloadedCount > 0 || notAvailableCount > 0 {
+		fmt.Fprintf(os.Stderr, "📋 已加载缓存: %d 个已下载, %d 个不可用\n", downloadedCount, notAvailableCount)
+	}
+
+	// 预过滤：检查缓存，提前跳过已处理的 DOI
+	var filteredURLs []string
+	var cacheSkipResults []DownloadResult
+	for _, pageURL := range urls {
+		parsedURL, err := url.Parse(pageURL)
+		if err != nil {
+			continue
+		}
+		doi := strings.TrimPrefix(parsedURL.Path, "/")
+
+		if skip, reason := cache.ShouldSkip(doi); skip {
+			// 生成跳过结果，不需要与网站交互
+			cacheSkipResults = append(cacheSkipResults, DownloadResult{
+				Status:   "skip",
+				Filename: strings.ReplaceAll(strings.ReplaceAll(doi, "/", "_"), ":", "_") + ".pdf",
+				DOI:      doi,
+				Error:    reason,
+				Duration: 0,
+			})
+		} else {
+			filteredURLs = append(filteredURLs, pageURL)
+		}
+	}
+
+	// 显示预过滤结果
+	if len(cacheSkipResults) > 0 {
+		fmt.Fprintf(os.Stderr, "⏭️  缓存跳过: %d 个 DOI（无需网络请求）\n", len(cacheSkipResults))
+	}
+
 	stats := &DownloadStats{
 		Total:       len(urls),
+		Skip:        len(cacheSkipResults), // 预先计入缓存跳过的数量
 		Errors:      make([]DownloadError, 0),
 		AllTimes:    make([]time.Duration, 0),
 		SuccessTime: make([]time.Duration, 0),
 	}
+
+	// 如果所有 URL 都被缓存跳过，直接返回
+	if len(filteredURLs) == 0 {
+		fmt.Fprintf(os.Stderr, "✅ 所有 DOI 已在缓存中，无需下载\n")
+		return stats, nil
+	}
+
+	fmt.Fprintf(os.Stderr, "📥 需要处理: %d 个 DOI\n", len(filteredURLs))
 
 	// 创建复用的 HTTP 客户端（带连接池优化）
 	transport := &http.Transport{
@@ -91,8 +276,8 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 		url       string
 		startTime time.Time
 	}
-	jobs := make(chan jobWithTime, len(urls))
-	results := make(chan DownloadResult, len(urls))
+	jobs := make(chan jobWithTime, len(filteredURLs))
+	results := make(chan DownloadResult, len(filteredURLs))
 
 	// 启动 workers
 	var wg sync.WaitGroup
@@ -101,7 +286,7 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				result := downloadSinglePDF(job.url, pdfDir, sharedClient, pdfClient)
+				result := downloadSinglePDF(job.url, pdfDir, sharedClient, pdfClient, cache)
 				// 计算从提交到完成的总时间（包括等待时间）
 				result.Duration = time.Since(job.startTime)
 				results <- result
@@ -112,9 +297,9 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 	// 开始计时（在发送任务之前）
 	startTime := time.Now()
 
-	// 发送任务（记录每个任务的提交时间）
+	// 发送任务（记录每个任务的提交时间）- 只发送过滤后的 URL
 	go func() {
-		for _, u := range urls {
+		for _, u := range filteredURLs {
 			jobs <- jobWithTime{
 				url:       u,
 				startTime: time.Now(),
@@ -129,9 +314,9 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 		close(results)
 	}()
 
-	// 创建进度条（使用 stderr 避免与统计输出冲突）
+	// 创建进度条（使用 stderr 避免与统计输出冲突）- 只显示需要处理的数量
 	bar := progressbar.NewOptions(
-		len(urls),
+		len(filteredURLs),
 		progressbar.OptionSetWriter(os.Stderr),
 		progressbar.OptionSetWidth(40),
 		progressbar.OptionShowCount(),
@@ -207,7 +392,7 @@ func setBrowserHeaders(req *http.Request) {
 
 // downloadSinglePDF 下载单个 PDF 文件
 // 注意：Duration 字段由调用者计算（从任务提交到完成的时间）
-func downloadSinglePDF(pageURL string, pdfDir string, client *http.Client, pdfClient *http.Client) DownloadResult {
+func downloadSinglePDF(pageURL string, pdfDir string, client *http.Client, pdfClient *http.Client, cache *DOICache) DownloadResult {
 	// 辅助函数：创建结果（Duration 由外部计算）
 	createResult := func(status, filename string, size int64, doi, errMsg string) DownloadResult {
 		return DownloadResult{
@@ -344,12 +529,14 @@ func downloadSinglePDF(pageURL string, pdfDir string, client *http.Client, pdfCl
 
 		// 优先检查是否是文章不可用的情况
 		needDebug := true // 是否需要保存 HTML 用于调试
+		isNotAvailable := false
 		if strings.Contains(lowerTitle, "article is not available") ||
 			strings.Contains(lowerHtml, "article is not available") ||
 			strings.Contains(lowerHtml, "not available through sci-hub") ||
 			strings.Contains(lowerHtml, "not yet available in my database") {
 			errorMsg = "文章在 Sci-Hub 上不可用"
 			needDebug = false // 文章不可用是正常情况，不需要保存 debug
+			isNotAvailable = true
 		} else if strings.Contains(lowerHtml, "captcha") ||
 			strings.Contains(lowerHtml, "are you a robot") ||
 			strings.Contains(lowerHtml, "altcha-widget") ||
@@ -374,6 +561,11 @@ func downloadSinglePDF(pageURL string, pdfDir string, client *http.Client, pdfCl
 			debugFilename = strings.ReplaceAll(debugFilename, ":", "_")
 			debugFile := filepath.Join(debugDir, fmt.Sprintf("%s.html", debugFilename))
 			os.WriteFile(debugFile, htmlContent, 0644)
+		}
+
+		// 如果确认文章在 SciHub 上不可用，记录到缓存
+		if isNotAvailable && cache != nil {
+			cache.AddNotAvailable(doi)
 		}
 
 		return createResult("failed", pdfFilename, 0, doi, errorMsg)
@@ -510,6 +702,11 @@ func downloadSinglePDF(pageURL string, pdfDir string, client *http.Client, pdfCl
 	// 移动到最终位置
 	if err := os.Rename(tmpPath, pdfFilePath); err != nil {
 		return createResult("failed", pdfFilename, 0, doi, fmt.Sprintf("移动文件失败: %v", err))
+	}
+
+	// 下载成功，更新缓存
+	if cache != nil {
+		cache.AddDownloaded(doi)
 	}
 
 	return createResult("success", pdfFilename, written, doi, "")
