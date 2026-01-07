@@ -21,6 +21,9 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 - ✅ Extract DOIs from WoS exported TXT files
 - ✅ Batch download PDFs from Sci-Hub
 - ✅ High-performance concurrent downloads (multi-threading in Python, goroutines in Go)
+- ✅ **Anti-403 protection**: Complete browser headers, random delays, automatic retry mechanism
+- ✅ **Gzip decompression**: Automatic handling of compressed responses
+- ✅ **Smart error handling**: Detailed error messages and debugging support
 - ✅ Comprehensive error logging and reporting
 - ✅ Beautiful console output with progress tracking (Python)
 - ✅ Detailed statistics and summaries
@@ -139,7 +142,7 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
     ```bash
     -a, --archive <path>    Archive directory path (required)
     -b, --budget <number>   Limit number of DOIs to download (default: all)
-    -w, --workers <number>  Number of concurrent workers (default: 16)
+    -w, --workers <number>  Number of concurrent workers (default: 3)
     -pdf <path>             PDF output directory (default: ./pdf)
     -help                   Show help message
     ```
@@ -147,18 +150,22 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
     **Examples**:
 
     ```bash
-    # Download all DOIs with default settings (16 workers)
+    # Download all DOIs with default settings (3 workers, safe for avoiding 403)
     ./bin/doihive-darwin-arm64 -a archive
 
-    # Download first 100 DOIs with 64 workers
-    ./bin/doihive-darwin-arm64 -a archive -b 100 -w 64
+    # Download first 100 DOIs with 4 workers (still safe)
+    ./bin/doihive-darwin-arm64 -a archive -b 100 -w 4
 
     # Download to custom directory
     ./bin/doihive-darwin-arm64 -a archive -pdf ./downloads
+
+    # For very large batches, you can increase workers (but may risk 403)
+    ./bin/doihive-darwin-arm64 -a archive -b 1000 -w 8
     ```
 
 4. **Output**:
     - PDFs are saved to `pdf/` directory (or specified directory)
+    - Failed HTML pages saved to `pdf/debug/` for troubleshooting
     - Error information displayed in console
     - Detailed statistics including throughput and average wall-clock time
 
@@ -170,18 +177,35 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 4. **PDF Download**: Downloads PDFs using multi-threaded requests
 5. **Error Handling**: Records failed downloads with detailed error information
 
+### Anti-403 Protection
+
+Both Python and Go implementations include comprehensive protection against 403 errors:
+
+- **Complete browser headers**: Full User-Agent, Accept, Accept-Language, and other headers to mimic real browsers
+- **Random delays**: 0.5-2.0 seconds before each request to avoid being flagged as a bot
+- **Automatic retry**: Up to 3 retries with exponential backoff when encountering 403 errors
+- **Referer headers**: Added for PDF downloads to indicate source page
+- **Low concurrency by default**: Default 3 workers to minimize risk of triggering rate limits
+
+**Recommended Settings**:
+
+- **Default (3 workers)**: Safest, ~65-80% success rate, suitable for most use cases
+- **4 workers**: Still safe, slightly faster
+- **2 workers**: Most conservative, use if experiencing 403 errors
+
 ### Performance Comparison
 
-| Version | Concurrency | Throughput (tasks/sec) | Best For |
-| --------- | ------------- | ------------------------ | ---------- |
-| **Go** | 64-128 | ~18-23 | Large-scale downloads (1000+ tasks) |
-| **Python** | 16-32 | ~7-10 | Small to medium downloads (<1000 tasks) |
+| Version | Concurrency | Throughput (tasks/sec) | Success Rate | Best For |
+| --------- | ------------- | ------------------------ | -------------- | ---------- |
+| **Go** | 3 (default) | ~2-3 | ~65-80% | All use cases (recommended) |
+| **Go** | 4-8 | ~3-5 | ~60-75% | Medium batches with acceptable risk |
+| **Python** | 3 (default) | ~1-2 | ~65-80% | Small to medium downloads |
 
 **Recommendations**:
 
-- **< 1000 tasks**: Either version works well
-- **1000-3000 tasks**: Go version recommended (2-3x faster)
-- **> 3000 tasks**: Go version strongly recommended (significant time savings)
+- **< 1000 tasks**: Default settings (3 workers) work well for both versions
+- **1000-3000 tasks**: Go version recommended (2-3x faster, same safety)
+- **> 3000 tasks**: Go version strongly recommended, consider using 4 workers for better throughput
 
 ## Project Structure
 
@@ -217,6 +241,9 @@ DoiHive/
 - [x] Construct Sci-Hub URLs from DOIs
 - [x] Batch download PDFs with multi-threading (Python)
 - [x] High-performance concurrent downloads with goroutines (Go)
+- [x] **Anti-403 protection**: Complete browser headers, random delays, retry mechanism
+- [x] **Gzip decompression**: Automatic handling of compressed HTML/PDF responses
+- [x] **Smart error detection**: Identify unavailable articles, captcha pages, etc.
 - [x] Error handling and logging
 - [x] Beautiful console output with progress tracking (Python)
 - [x] Comprehensive statistics and summaries
@@ -224,6 +251,7 @@ DoiHive/
 - [x] Configurable concurrency and download limits
 - [x] Performance metrics (throughput, average wall-clock time)
 - [x] Cross-platform compilation support (Go)
+- [x] Debug HTML saving for troubleshooting
 
 ### 🚧 In Progress / Planned
 
@@ -231,7 +259,6 @@ DoiHive/
 - [ ] Support for other bibliographic data sources (beyond WoS)
 - [ ] Configuration file support
 - [ ] Resume interrupted downloads
-- [ ] Rate limiting and retry mechanisms
 - [ ] Multiple Sci-Hub mirror support
 - [ ] Progress persistence for large-scale downloads
 - [ ] Distributed processing support
