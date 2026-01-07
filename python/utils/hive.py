@@ -22,6 +22,7 @@ import logging
 import json
 import time
 import re
+import random
 
 
 # Local modules / 本地模块
@@ -29,7 +30,7 @@ from .logger import log_to_file_only
 
 
 def pdf_hive(
-    urls: list[str], pdf_dir: Path, error_dir: Path = None, max_workers: int = 16
+    urls: list[str], pdf_dir: Path, error_dir: Path = None, max_workers: int = 3
 ):
     """
     批量下载 PDF 文件（多线程版本）
@@ -89,8 +90,18 @@ def pdf_hive(
 
     # 创建复用的 Session（连接池优化）/ Create reusable Session (connection pool optimization)
     session = requests.Session()
+    # 设置完整的浏览器请求头，避免被识别为爬虫 / Set complete browser headers to avoid being identified as a crawler
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Cache-Control": "max-age=0",
     })
     # 配置连接池 / Configure connection pool
     adapter = requests.adapters.HTTPAdapter(
@@ -416,11 +427,41 @@ def _download_single_pdf(url: str, session: requests.Session, pdf_dir: Path) -> 
         return result
 
     # 第一步：获取页面 HTML / Step 1: Get page HTML
-    try:
-        response = session.get(url, timeout=10)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        result["error"] = f"页面请求失败: {str(e)}"
+    # 添加随机延迟，避免请求过快被识别为爬虫 / Add random delay to avoid being identified as a crawler
+    time.sleep(random.uniform(0.5, 2.0))
+    
+    # 重试机制：最多重试 3 次 / Retry mechanism: up to 3 retries
+    max_retries = 3
+    retry_delay = 2  # 初始重试延迟（秒）/ Initial retry delay (seconds)
+    
+    for attempt in range(max_retries):
+        try:
+            response = session.get(url, timeout=10)
+            
+            # 如果是 403 错误，等待后重试 / If 403 error, wait and retry
+            if response.status_code == 403:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (attempt + 1) + random.uniform(0, 2)
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    result["error"] = f"页面请求失败: HTTP 403 (已重试 {max_retries} 次)"
+                    return result
+            
+            response.raise_for_status()
+            break  # 成功，退出重试循环 / Success, exit retry loop
+            
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                wait_time = retry_delay * (attempt + 1) + random.uniform(0, 2)
+                time.sleep(wait_time)
+                continue
+            else:
+                result["error"] = f"页面请求失败: {str(e)} (已重试 {max_retries} 次)"
+                return result
+    else:
+        # 所有重试都失败了 / All retries failed
+        result["error"] = f"页面请求失败: 已重试 {max_retries} 次"
         return result
 
     html_content = response.text
@@ -434,11 +475,49 @@ def _download_single_pdf(url: str, session: requests.Session, pdf_dir: Path) -> 
         return result
 
     # 第三步：下载 PDF 文件 / Step 3: Download PDF file
-    try:
-        pdf_response = session.get(pdf_url, timeout=30, stream=True)
-        pdf_response.raise_for_status()
+    # 添加随机延迟 / Add random delay
+    time.sleep(random.uniform(0.3, 1.0))
+    
+    # 为 PDF 下载添加 Referer 头 / Add Referer header for PDF download
+    headers_for_pdf = {"Referer": url}
+    
+    # 重试机制：最多重试 3 次 / Retry mechanism: up to 3 retries
+    for attempt in range(max_retries):
+        try:
+            pdf_response = session.get(pdf_url, timeout=30, stream=True, headers=headers_for_pdf)
+            
+            # 如果是 403 错误，等待后重试 / If 403 error, wait and retry
+            if pdf_response.status_code == 403:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (attempt + 1) + random.uniform(0, 2)
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    result["error"] = f"PDF 下载失败: HTTP 403 (已重试 {max_retries} 次)"
+                    return result
+            
+            pdf_response.raise_for_status()
+            break  # 成功，退出重试循环 / Success, exit retry loop
+            
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                wait_time = retry_delay * (attempt + 1) + random.uniform(0, 2)
+                time.sleep(wait_time)
+                continue
+            else:
+                result["error"] = f"PDF 下载失败: {str(e)} (已重试 {max_retries} 次)"
+                if pdf_file_path.exists():
+                    pdf_file_path.unlink()
+                return result
+    else:
+        # 所有重试都失败了 / All retries failed
+        result["error"] = f"PDF 下载失败: 已重试 {max_retries} 次"
+        if pdf_file_path.exists():
+            pdf_file_path.unlink()
+        return result
 
-        # 使用 stream=True 下载大文件 / Use stream=True to download large files
+    # 使用 stream=True 下载大文件 / Use stream=True to download large files
+    try:
         with open(pdf_file_path, "wb") as f:
             for chunk in pdf_response.iter_content(chunk_size=8192):
                 if chunk:
@@ -463,13 +542,8 @@ def _download_single_pdf(url: str, session: requests.Session, pdf_dir: Path) -> 
         result["size"] = file_size
         return result
 
-    except requests.exceptions.RequestException as e:
-        result["error"] = f"PDF 下载失败: {str(e)}"
-        if pdf_file_path.exists():
-            pdf_file_path.unlink()
-        return result
     except Exception as e:
-        result["error"] = f"未知错误: {str(e)}"
+        result["error"] = f"文件写入失败: {str(e)}"
         if pdf_file_path.exists():
             pdf_file_path.unlink()
         return result
