@@ -124,7 +124,7 @@ func main() {
 	} else if *workersLong > 0 {
 		workers = *workersLong
 	} else {
-		workers = 16 // 默认值（Go goroutines 很轻量，可以设置较高）
+		workers = 3 // 默认值（低并发以避免 403 错误）
 	}
 
 	// 4. 下载 PDF
