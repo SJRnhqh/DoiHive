@@ -184,16 +184,22 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 
 // setBrowserHeaders 设置完整的浏览器请求头，避免被识别为爬虫
 func setBrowserHeaders(req *http.Request) {
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
+	// 使用更真实的 User-Agent（定期更新以匹配最新浏览器版本）
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 	req.Header.Set("Sec-Fetch-Dest", "document")
 	req.Header.Set("Sec-Fetch-Mode", "navigate")
 	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
 	req.Header.Set("Cache-Control", "max-age=0")
+	req.Header.Set("DNT", "1") // Do Not Track
+	req.Header.Set("sec-ch-ua", `"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`)
+	req.Header.Set("sec-ch-ua-mobile", "?0")
+	req.Header.Set("sec-ch-ua-platform", `"Windows"`)
 }
 
 // downloadSinglePDF 下载单个 PDF 文件
@@ -236,12 +242,13 @@ func downloadSinglePDF(pageURL string, pdfDir string, client *http.Client, pdfCl
 	}
 
 	// 添加随机延迟，避免请求过快被识别为爬虫
-	delay := time.Duration(500+rand.Intn(1500)) * time.Millisecond // 0.5-2.0 秒
+	// 如果遇到 403 错误，增加延迟时间
+	delay := time.Duration(1000+rand.Intn(3000)) * time.Millisecond // 1.0-4.0 秒（增加延迟）
 	time.Sleep(delay)
 
 	// 第一步：获取页面 HTML（带重试机制）
 	const maxRetries = 3
-	retryDelay := 2 * time.Second // 初始重试延迟
+	retryDelay := 5 * time.Second // 初始重试延迟（增加到 5 秒）
 
 	var resp *http.Response
 	var req *http.Request
@@ -262,15 +269,16 @@ func downloadSinglePDF(pageURL string, pdfDir string, client *http.Client, pdfCl
 			return createResult("failed", pdfFilename, 0, doi, fmt.Sprintf("页面请求失败: %v (已重试 %d 次)", err, maxRetries))
 		}
 
-		// 如果是 403 错误，等待后重试
+		// 如果是 403 错误，等待后重试（增加更长的延迟）
 		if resp.StatusCode == http.StatusForbidden {
 			resp.Body.Close()
 			if attempt < maxRetries-1 {
-				waitTime := retryDelay*time.Duration(attempt+1) + time.Duration(rand.Intn(2000))*time.Millisecond
+				// 指数退避：5s, 10s, 15s + 随机 0-5s
+				waitTime := retryDelay*time.Duration(attempt+1) + time.Duration(rand.Intn(5000))*time.Millisecond
 				time.Sleep(waitTime)
 				continue
 			}
-			return createResult("failed", pdfFilename, 0, doi, fmt.Sprintf("页面请求失败: HTTP 403 (已重试 %d 次)", maxRetries))
+			return createResult("failed", pdfFilename, 0, doi, fmt.Sprintf("页面请求失败: HTTP 403 (已重试 %d 次，可能是 IP 被封禁)", maxRetries))
 		}
 
 		// 对于 404 错误，如果是第一次尝试，可以重试一次（可能是临时问题）
@@ -360,8 +368,8 @@ func downloadSinglePDF(pageURL string, pdfDir string, client *http.Client, pdfCl
 	}
 
 	// 第三步：下载 PDF 文件
-	// 添加随机延迟
-	delay = time.Duration(300+rand.Intn(700)) * time.Millisecond // 0.3-1.0 秒
+	// 添加随机延迟（增加延迟时间）
+	delay = time.Duration(500+rand.Intn(1500)) * time.Millisecond // 0.5-2.0 秒
 	time.Sleep(delay)
 
 	// PDF 下载（带重试机制）
@@ -385,15 +393,16 @@ func downloadSinglePDF(pageURL string, pdfDir string, client *http.Client, pdfCl
 			return createResult("failed", pdfFilename, 0, doi, fmt.Sprintf("PDF 下载失败: %v (已重试 %d 次)", err, maxRetries))
 		}
 
-		// 如果是 403 错误，等待后重试
+		// 如果是 403 错误，等待后重试（增加更长的延迟）
 		if pdfResp.StatusCode == http.StatusForbidden {
 			pdfResp.Body.Close()
 			if attempt < maxRetries-1 {
-				waitTime := retryDelay*time.Duration(attempt+1) + time.Duration(rand.Intn(2000))*time.Millisecond
+				// 指数退避：5s, 10s, 15s + 随机 0-5s
+				waitTime := retryDelay*time.Duration(attempt+1) + time.Duration(rand.Intn(5000))*time.Millisecond
 				time.Sleep(waitTime)
 				continue
 			}
-			return createResult("failed", pdfFilename, 0, doi, fmt.Sprintf("PDF 下载失败: HTTP 403 (已重试 %d 次)", maxRetries))
+			return createResult("failed", pdfFilename, 0, doi, fmt.Sprintf("PDF 下载失败: HTTP 403 (已重试 %d 次，可能是 IP 被封禁)", maxRetries))
 		}
 
 		if pdfResp.StatusCode != http.StatusOK {
