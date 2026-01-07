@@ -133,16 +133,19 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 	bar := progressbar.NewOptions(
 		len(urls),
 		progressbar.OptionSetWriter(os.Stderr),
-		progressbar.OptionSetWidth(50),
+		progressbar.OptionSetWidth(40),
 		progressbar.OptionShowCount(),
 		progressbar.OptionSetDescription("📥 下载中"),
 		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "=",
-			SaucerHead:    ">",
-			SaucerPadding: " ",
-			BarStart:      "[",
-			BarEnd:        "]",
+			Saucer:        "█",
+			SaucerHead:    "▓",
+			SaucerPadding: "░",
+			BarStart:      "│",
+			BarEnd:        "│",
 		}),
+		progressbar.OptionShowElapsedTimeOnFinish(),
+		progressbar.OptionSetPredictTime(true),
+		progressbar.OptionSetRenderBlankState(true),
 		progressbar.OptionOnCompletion(func() {
 			fmt.Fprint(os.Stderr, "\n")
 		}),
@@ -173,8 +176,8 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 		// 更新进度条（在统计更新后）
 		bar.Add(1)
 
-		// 更新进度条描述以显示实时统计
-		desc := fmt.Sprintf("📥 下载中 [✅%d ⏭️%d ❌%d]", stats.Success, stats.Skip, stats.Failed)
+		// 更新进度条描述以显示实时统计（添加间距避免重叠）
+		desc := fmt.Sprintf("📥 ✅ %-3d ⏭️ %-3d ❌ %-3d", stats.Success, stats.Skip, stats.Failed)
 		bar.Describe(desc)
 	}
 	stats.TotalTime = time.Since(startTime)
