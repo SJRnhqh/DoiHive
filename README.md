@@ -24,6 +24,7 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 - ✅ **Anti-403 protection**: Complete browser headers, random delays, automatic retry mechanism
 - ✅ **Gzip decompression**: Automatic handling of compressed responses
 - ✅ **Smart error handling**: Detailed error messages and debugging support
+- ✅ **Real-time progress bar**: Live progress tracking with success/skip/failed counts (Go)
 - ✅ Comprehensive error logging and reporting
 - ✅ Beautiful console output with progress tracking (Python)
 - ✅ Detailed statistics and summaries
@@ -47,6 +48,7 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 
 - **Go 1.25+**
 - `github.com/PuerkitoBio/goquery` - HTML parsing for PDF URL extraction
+- `github.com/schollz/progressbar/v3` - Real-time progress bar with live statistics
 - High-performance goroutines for concurrent downloads
 - HTTP connection pooling for optimal performance
 - Cross-platform compilation support
@@ -166,8 +168,15 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 4. **Output**:
     - PDFs are saved to `pdf/` directory (or specified directory)
     - Failed HTML pages saved to `pdf/debug/` for troubleshooting
+    - **Real-time progress bar** showing download progress with live success/skip/failed counts
     - Error information displayed in console
     - Detailed statistics including throughput and average wall-clock time
+
+    **Progress Bar Example**:
+
+    ``` shell
+    📥 下载中 [✅5 ⏭️0 ❌2] [=========>--------] 7/20 35% 2.3 it/s
+    ```
 
 ### Workflow
 
@@ -244,6 +253,7 @@ DoiHive/
 - [x] **Anti-403 protection**: Complete browser headers, random delays, retry mechanism
 - [x] **Gzip decompression**: Automatic handling of compressed HTML/PDF responses
 - [x] **Smart error detection**: Identify unavailable articles, captcha pages, etc.
+- [x] **Real-time progress bar**: Live progress tracking with statistics (Go)
 - [x] Error handling and logging
 - [x] Beautiful console output with progress tracking (Python)
 - [x] Comprehensive statistics and summaries
