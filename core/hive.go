@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/schollz/progressbar/v3"
 )
 
 // DownloadResult 下载结果
@@ -128,6 +129,25 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 		close(results)
 	}()
 
+	// 创建进度条（使用 stderr 避免与统计输出冲突）
+	bar := progressbar.NewOptions(
+		len(urls),
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionSetWidth(50),
+		progressbar.OptionShowCount(),
+		progressbar.OptionSetDescription("📥 下载中"),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "=",
+			SaucerHead:    ">",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}),
+		progressbar.OptionOnCompletion(func() {
+			fmt.Fprint(os.Stderr, "\n")
+		}),
+	)
+
 	// 收集结果
 	for result := range results {
 		// 记录所有任务的时间（包括成功、失败、跳过）
@@ -149,6 +169,13 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 				Time:  time.Now(),
 			})
 		}
+
+		// 更新进度条（在统计更新后）
+		bar.Add(1)
+
+		// 更新进度条描述以显示实时统计
+		desc := fmt.Sprintf("📥 下载中 [✅%d ⏭️%d ❌%d]", stats.Success, stats.Skip, stats.Failed)
+		bar.Describe(desc)
 	}
 	stats.TotalTime = time.Since(startTime)
 
