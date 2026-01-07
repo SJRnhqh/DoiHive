@@ -144,6 +144,47 @@ func main() {
 
 	// 显示下载统计
 	printDownloadStats(stats)
+
+	// 保存日志和失败的 DOI
+	saveLogsAndErrors(absPdfDir, stats)
+}
+
+// saveLogsAndErrors 保存日志和失败的 DOI 到文件
+func saveLogsAndErrors(baseDir string, stats *core.DownloadStats) {
+	logger, err := core.NewLogger(baseDir)
+	if err != nil {
+		fmt.Printf("⚠️  无法创建日志记录器: %v\n", err)
+		return
+	}
+
+	// 保存完整日志
+	if err := logger.SaveDownloadLog(stats); err != nil {
+		fmt.Printf("⚠️  保存日志失败: %v\n", err)
+	}
+
+	// 如果有失败的 DOI，保存失败列表
+	if len(stats.Errors) > 0 {
+		// 保存详细错误信息
+		if err := logger.SaveFailedDOIs(stats.Errors); err != nil {
+			fmt.Printf("⚠️  保存失败 DOI 列表失败: %v\n", err)
+		}
+
+		// 保存仅含 DOI 的列表（方便重试）
+		if err := logger.SaveDOIsOnly(stats.Errors); err != nil {
+			fmt.Printf("⚠️  保存重试 DOI 列表失败: %v\n", err)
+		}
+
+		// 显示日志文件位置
+		logFile, failedFile, retryFile := logger.GetLogFilePaths()
+		fmt.Printf("\n📝 日志文件已保存:\n")
+		fmt.Printf("  📄 完整日志: %s\n", logFile)
+		fmt.Printf("  ❌ 失败详情: %s\n", failedFile)
+		fmt.Printf("  🔄 重试列表: %s\n", retryFile)
+	} else {
+		// 没有失败，只保存日志
+		logFile, _, _ := logger.GetLogFilePaths()
+		fmt.Printf("\n📝 日志文件已保存: %s\n", logFile)
+	}
 }
 
 func printCheckResult(result *core.CheckResult) {

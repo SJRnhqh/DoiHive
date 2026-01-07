@@ -78,12 +78,12 @@ func DownloadPDFs(urls []string, pdfDir string, maxWorkers int) (*DownloadStats,
 
 	sharedClient := &http.Client{
 		Transport: transport,
-		Timeout:   10 * time.Second, // 页面请求超时
+		Timeout:   15 * time.Second, // 页面请求超时
 	}
 
 	pdfClient := &http.Client{
 		Transport: transport,
-		Timeout:   30 * time.Second, // PDF 下载超时
+		Timeout:   120 * time.Second, // PDF 下载超时（大文件需要更长时间）
 	}
 
 	// 创建 worker pool
@@ -340,14 +340,21 @@ func downloadSinglePDF(pageURL string, pdfDir string, client *http.Client, pdfCl
 		lowerTitle := strings.ToLower(title)
 
 		// 优先检查是否是文章不可用的情况
+		needDebug := true // 是否需要保存 HTML 用于调试
 		if strings.Contains(lowerTitle, "article is not available") ||
 			strings.Contains(lowerHtml, "article is not available") ||
-			strings.Contains(lowerHtml, "not available through sci-hub") {
+			strings.Contains(lowerHtml, "not available through sci-hub") ||
+			strings.Contains(lowerHtml, "not yet available in my database") {
 			errorMsg = "文章在 Sci-Hub 上不可用"
-		} else if strings.Contains(lowerHtml, "captcha") {
+			needDebug = false // 文章不可用是正常情况，不需要保存 debug
+		} else if strings.Contains(lowerHtml, "captcha") ||
+			strings.Contains(lowerHtml, "are you a robot") ||
+			strings.Contains(lowerHtml, "altcha-widget") ||
+			strings.Contains(lowerTitle, "robot") {
 			errorMsg += " (检测到验证码)"
 		} else if strings.Contains(lowerHtml, "not found") || strings.Contains(lowerHtml, "404") {
 			errorMsg += " (页面未找到)"
+			needDebug = false // 404 也是正常情况
 		} else if title != "" {
 			// 如果页面有标题，添加到错误信息中
 			if len(title) > 50 {
@@ -356,13 +363,15 @@ func downloadSinglePDF(pageURL string, pdfDir string, client *http.Client, pdfCl
 			errorMsg += fmt.Sprintf(" (页面标题: %s)", title)
 		}
 
-		// 保存 HTML 到文件用于调试（仅在失败时）
-		debugDir := filepath.Join(pdfDir, "debug")
-		os.MkdirAll(debugDir, 0755)
-		debugFilename := strings.ReplaceAll(doi, "/", "_")
-		debugFilename = strings.ReplaceAll(debugFilename, ":", "_")
-		debugFile := filepath.Join(debugDir, fmt.Sprintf("%s.html", debugFilename))
-		os.WriteFile(debugFile, htmlContent, 0644)
+		// 只在需要调试时保存 HTML（排除正常的失败情况）
+		if needDebug {
+			debugDir := filepath.Join(pdfDir, "debug")
+			os.MkdirAll(debugDir, 0755)
+			debugFilename := strings.ReplaceAll(doi, "/", "_")
+			debugFilename = strings.ReplaceAll(debugFilename, ":", "_")
+			debugFile := filepath.Join(debugDir, fmt.Sprintf("%s.html", debugFilename))
+			os.WriteFile(debugFile, htmlContent, 0644)
+		}
 
 		return createResult("failed", pdfFilename, 0, doi, errorMsg)
 	}
