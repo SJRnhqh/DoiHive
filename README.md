@@ -42,9 +42,9 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 
 | Metric | Python | Go (default 3 workers) |
 | -------- | -------- | ----- |
-| Time per task | - | ~2-3s |
+| Time per task | - | ~400-600ms |
 | Concurrency | Single-threaded | Goroutines |
-| Throughput | - | ~0.5 DOI/s |
+| Throughput | - | ~2 DOI/s |
 | Cache/Anti-crawl | ❌ | ✅ |
 | Recommended for | Small-scale testing | Large-scale batch downloads |
 
@@ -147,7 +147,7 @@ DoiHive automates the process of extracting DOIs from bibliographic data files a
 | `-a` | Archive directory (required) | - |
 | `-b` | Batch size per round | 30 |
 | `-r` | Max rounds (0=unlimited) | 0 |
-| `-w` | Concurrent workers | 2 |
+| `-w` | Concurrent workers | 3 |
 | `-d` | Min delay between batches (sec) | 60 |
 | `-D` | Max delay between batches (sec) | 180 |
 

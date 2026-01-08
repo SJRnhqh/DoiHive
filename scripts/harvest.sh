@@ -25,7 +25,7 @@ set -e
 ARCHIVE_DIR=""
 BATCH_SIZE=30           # 每批下载数量
 MAX_ROUNDS=0            # 最大轮数（0=无限制，直到全部完成）
-WORKERS=2               # 并发数
+WORKERS=3               # 并发数
 MIN_DELAY=60            # 批次间最小等待秒数
 MAX_DELAY=180           # 批次间最大等待秒数
 PDF_DIR="./pdf"         # PDF 输出目录
