@@ -5,7 +5,7 @@
 .vscode
 
 # pdf & txt & error & logs
-pdf/
+*pdf/
 archive/
 error/
 logs/
